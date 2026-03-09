@@ -19,6 +19,13 @@ async def upsert_user(
 ) -> None:
     db = await get_db()
     await db.execute(
+        """
+        INSERT INTO users (user_id, username, first_name)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            first_name = excluded.first_name
+        """,
         (user_id, username, first_name),
     )
     await db.commit()
@@ -33,6 +40,10 @@ async def create_subscription(
     db = await get_db()
     expires_at = _now() + timedelta(days=days)
     cursor = await db.execute(
+        """
+        INSERT INTO subscriptions (user_id, invoice_id, expires_at, invite_link)
+        VALUES (?, ?, ?, ?)
+        """,
         (user_id, invoice_id, expires_at.isoformat(), invite_link),
     )
     await db.commit()
@@ -42,6 +53,12 @@ async def create_subscription(
 async def get_active_subscription(user_id: int) -> dict | None:
     db = await get_db()
     cursor = await db.execute(
+        """
+        SELECT * FROM subscriptions
+        WHERE user_id = ? AND is_active = 1
+        ORDER BY expires_at DESC
+        LIMIT 1
+        """,
         (user_id,),
     )
     row = await cursor.fetchone()
@@ -55,6 +72,14 @@ async def get_expiring_subscriptions(days_before: int) -> list[dict]:
     target = _now() + timedelta(days=days_before)
     now = _now()
     cursor = await db.execute(
+        """
+        SELECT s.*, u.username, u.first_name
+        FROM subscriptions s
+        JOIN users u ON s.user_id = u.user_id
+        WHERE s.is_active = 1
+          AND s.expires_at <= ?
+          AND s.expires_at > ?
+        """,
         (target.isoformat(), now.isoformat()),
     )
     rows = await cursor.fetchall()
@@ -65,6 +90,13 @@ async def get_expired_subscriptions() -> list[dict]:
     db = await get_db()
     now = _now()
     cursor = await db.execute(
+        """
+        SELECT s.*, u.username, u.first_name
+        FROM subscriptions s
+        JOIN users u ON s.user_id = u.user_id
+        WHERE s.is_active = 1
+          AND s.expires_at <= ?
+        """,
         (now.isoformat(),),
     )
     rows = await cursor.fetchall()
