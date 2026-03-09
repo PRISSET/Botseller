@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.config import BotConfig, load_config
 from bot.database.db import close_db, init_db
-from bot.handlers import payment, start
+from bot.handlers import channel, payment, start
 from bot.services.crypto_pay import CryptoPayService
 from bot.services.scheduler import SchedulerService
 from bot.services.subscription import SubscriptionService
@@ -49,6 +49,7 @@ async def main() -> None:
 
     dp.include_router(start.router)
     dp.include_router(payment.router)
+    dp.include_router(channel.router)
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -73,7 +74,14 @@ async def main() -> None:
     logger.info("Crypto Pay mode: %s", mode)
     logger.info("Bot starting...")
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot,
+            allowed_updates=[
+                "message",
+                "callback_query",
+                "chat_member",
+            ],
+        )
     finally:
         scheduler.shutdown()
         await crypto_pay.close()
