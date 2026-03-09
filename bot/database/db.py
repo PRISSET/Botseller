@@ -23,6 +23,9 @@ async def init_db() -> None:
             first_name  TEXT,
             created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         )
+    """)
+
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id         INTEGER NOT NULL,
@@ -35,7 +38,23 @@ async def init_db() -> None:
             invite_link     TEXT,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         )
+    """)
+
+    await db.execute("""
         CREATE INDEX IF NOT EXISTS idx_sub_user
         ON subscriptions(user_id)
+    """)
+
+    await db.execute("""
         CREATE INDEX IF NOT EXISTS idx_sub_active
         ON subscriptions(is_active, expires_at)
+    """)
+
+    await db.commit()
+
+
+async def close_db() -> None:
+    global _connection
+    if _connection is not None:
+        await _connection.close()
+        _connection = None
