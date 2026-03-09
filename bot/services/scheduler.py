@@ -5,6 +5,7 @@ from aiogram import Bot
 
 from bot.config import BotConfig
 from bot.database.models import (
+    get_all_known_user_ids,
     get_expired_subscriptions,
     get_expiring_subscriptions,
     mark_reminder_sent,
@@ -125,3 +126,32 @@ class SchedulerService:
 
             await self.sub_service.kick_user(sub["user_id"], sub["id"])
             logger.info("Kicked expired user %d (sub %d)", sub["user_id"], sub["id"])
+
+    async def check_channel_members(self) -> None:
+        await self._kick_non_subscribers()
+
+    async def _kick_non_subscribers(self) -> None:
+        user_ids = await get_all_known_user_ids()
+        for user_id in user_ids:
+            try:
+                if not await self.sub_service.is_member_of_channel(user_id):
+                    continue
+
+                if await self.sub_service.is_admin_of_channel(user_id):
+                    continue
+
+                if await self.sub_service.has_active_subscription(user_id):
+                    continue
+
+                await self.bot.ban_chat_member(
+                    chat_id=self.config.channel_id,
+                    user_id=user_id,
+                )
+                await self.bot.unban_chat_member(
+                    chat_id=self.config.channel_id,
+                    user_id=user_id,
+                    only_if_banned=True,
+                )
+                logger.info("Kicked non-subscriber user %d from channel", user_id)
+            except Exception as e:
+                logger.error("Failed to check/kick non-subscriber %d: %s", user_id, e)

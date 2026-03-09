@@ -142,3 +142,10 @@ async def mark_reminder_sent(subscription_id: int, days_before: int) -> None:
         (subscription_id,),
     )
     await db.commit()
+
+
+async def get_all_known_user_ids() -> list[int]:
+    db = await get_db()
+    cursor = await db.execute("SELECT user_id FROM users")
+    rows = await cursor.fetchall()
+    return [row[0] for row in rows]

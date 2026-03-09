@@ -57,9 +57,15 @@ async def main() -> None:
         minutes=config.scheduler_interval_minutes,
         id="check_subscriptions",
     )
+    scheduler.add_job(
+        scheduler_service.check_channel_members,
+        "interval",
+        minutes=1,
+        id="check_channel_members",
+    )
     scheduler.start()
     logger.info(
-        "Scheduler started (interval: %d min)",
+        "Scheduler started (subscriptions: %d min, channel members: 1 min)",
         config.scheduler_interval_minutes,
     )
 

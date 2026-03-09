@@ -40,6 +40,16 @@ class SubscriptionService:
         except TelegramBadRequest:
             return False
 
+    async def is_admin_of_channel(self, user_id: int) -> bool:
+        try:
+            member = await self.bot.get_chat_member(
+                chat_id=self.config.channel_id,
+                user_id=user_id,
+            )
+            return member.status in ("administrator", "creator")
+        except TelegramBadRequest:
+            return False
+
     async def generate_invite_link(self, user_id: int) -> str | None:
         if not await self.has_active_subscription(user_id):
             return None
