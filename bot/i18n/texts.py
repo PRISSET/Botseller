@@ -78,8 +78,12 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "One-time invite link ",
     },
     "renew_anytime": {
-        "ru": "Продление в любой момент\n\nОформите подписку для доступа к каналу. ",
-        "en": "Renew anytime\n\nSubscribe to access the channel. ",
+        "ru": "Продление в любой момент ",
+        "en": "Renew anytime ",
+    },
+    "subscribe_cta": {
+        "ru": "Оформите подписку для доступа к каналу. ",
+        "en": "Subscribe to access the channel. ",
     },
     "profile_title": {
         "ru": "Профиль",

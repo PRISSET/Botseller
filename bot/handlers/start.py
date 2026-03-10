@@ -13,6 +13,7 @@ from bot.keyboards.inline import (
     ICON_COIN,
     ICON_EXPIRED,
     ICON_HOURGLASS,
+    ICON_RENEW_STAR,
     ICON_STAR,
     ICON_VAMPIRE,
     get_language_keyboard,
@@ -89,6 +90,9 @@ async def _send_main_menu(message: Message, config: BotConfig, lang: str) -> Non
             custom_emoji(ICON_STAR),
             "\n",
             t("renew_anytime", lang),
+            custom_emoji(ICON_RENEW_STAR),
+            "\n\n",
+            t("subscribe_cta", lang),
             custom_emoji(ICON_VAMPIRE),
         )
         msg = await message.answer_animation(
