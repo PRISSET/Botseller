@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from bot.database.db import get_db
@@ -118,7 +119,7 @@ async def extend_subscription(subscription_id: int, days: int = 30) -> str:
     new_expires = base + timedelta(days=days)
 
     await db.execute(
-        "UPDATE subscriptions SET expires_at = ?, reminder_3d = 0, reminder_2d = 0 WHERE id = ?",
+        "UPDATE subscriptions SET expires_at = ?, reminder_3d = 0, reminder_2d = 0, reminders_sent = '[]' WHERE id = ?",
         (new_expires.isoformat(), subscription_id),
     )
     await db.commit()
@@ -134,14 +135,43 @@ async def deactivate_subscription(subscription_id: int) -> None:
     await db.commit()
 
 
-async def mark_reminder_sent(subscription_id: int, days_before: int) -> None:
+async def mark_reminder_sent(subscription_id: int, reminder_key: str) -> None:
     db = await get_db()
-    col = f"reminder_{days_before}d"
-    await db.execute(
-        f"UPDATE subscriptions SET {col} = 1 WHERE id = ?",
+    cursor = await db.execute(
+        "SELECT reminders_sent FROM subscriptions WHERE id = ?",
         (subscription_id,),
     )
+    row = await cursor.fetchone()
+    sent: list[str] = []
+    if row and row[0]:
+        try:
+            sent = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            sent = []
+
+    if reminder_key not in sent:
+        sent.append(reminder_key)
+
+    await db.execute(
+        "UPDATE subscriptions SET reminders_sent = ? WHERE id = ?",
+        (json.dumps(sent), subscription_id),
+    )
     await db.commit()
+
+
+async def get_reminders_sent(subscription_id: int) -> list[str]:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT reminders_sent FROM subscriptions WHERE id = ?",
+        (subscription_id,),
+    )
+    row = await cursor.fetchone()
+    if row and row[0]:
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
 
 
 async def get_all_known_user_ids() -> list[int]:
@@ -149,3 +179,28 @@ async def get_all_known_user_ids() -> list[int]:
     cursor = await db.execute("SELECT user_id FROM users")
     rows = await cursor.fetchall()
     return [row[0] for row in rows]
+
+
+async def get_user_language(user_id: int) -> str | None:
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT language FROM users WHERE user_id = ?",
+        (user_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return row[0]
+
+
+async def set_user_language(user_id: int, language: str) -> None:
+    db = await get_db()
+    await db.execute(
+        """
+        INSERT INTO users (user_id, language)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET language = excluded.language
+        """,
+        (user_id, language),
+    )
+    await db.commit()

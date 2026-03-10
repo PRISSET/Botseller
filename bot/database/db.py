@@ -21,9 +21,15 @@ async def init_db() -> None:
             user_id     INTEGER PRIMARY KEY,
             username    TEXT,
             first_name  TEXT,
+            language    TEXT,
             created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
+
+    try:
+        await db.execute("ALTER TABLE users ADD COLUMN language TEXT")
+    except Exception:
+        pass
 
     await db.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -35,10 +41,18 @@ async def init_db() -> None:
             is_active       INTEGER NOT NULL DEFAULT 1,
             reminder_3d     INTEGER NOT NULL DEFAULT 0,
             reminder_2d     INTEGER NOT NULL DEFAULT 0,
+            reminders_sent  TEXT NOT NULL DEFAULT '[]',
             invite_link     TEXT,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         )
     """)
+
+    try:
+        await db.execute(
+            "ALTER TABLE subscriptions ADD COLUMN reminders_sent TEXT NOT NULL DEFAULT '[]'"
+        )
+    except Exception:
+        pass
 
     await db.execute("""
         CREATE INDEX IF NOT EXISTS idx_sub_user

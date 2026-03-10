@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
 
@@ -7,9 +7,11 @@ from bot.config import BotConfig
 from bot.database.models import (
     get_all_known_user_ids,
     get_expired_subscriptions,
-    get_expiring_subscriptions,
+    get_reminders_sent,
+    get_user_language,
     mark_reminder_sent,
 )
+from bot.i18n.texts import pluralize_days, t
 from bot.keyboards.inline import (
     ICON_BOW,
     ICON_EXPIRED,
@@ -23,6 +25,27 @@ from bot.utils import bold, build_caption, cache_gif_id, custom_emoji, get_gif
 logger = logging.getLogger(__name__)
 
 
+async def _get_active_subs_expiring_within(hours: int) -> list[dict]:
+    from bot.database.db import get_db
+
+    db = await get_db()
+    now = datetime.now(UTC)
+    target = now + timedelta(hours=hours)
+    cursor = await db.execute(
+        """
+        SELECT s.*, u.username, u.first_name
+        FROM subscriptions s
+        JOIN users u ON s.user_id = u.user_id
+        WHERE s.is_active = 1
+          AND s.expires_at <= ?
+          AND s.expires_at > ?
+        """,
+        (target.isoformat(), now.isoformat()),
+    )
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
 class SchedulerService:
     def __init__(
         self, bot: Bot, config: BotConfig, subscription_service: SubscriptionService
@@ -31,17 +54,60 @@ class SchedulerService:
         self.config = config
         self.sub_service = subscription_service
 
+    async def _get_lang(self, user_id: int) -> str:
+        lang = await get_user_language(user_id)
+        return lang or "ru"
+
     async def check_subscriptions(self) -> None:
-        await self._send_reminders()
+        await self._send_day_reminders()
+        await self._send_hour_reminders()
         await self._kick_expired()
 
-    async def _send_reminders(self) -> None:
+    async def _send_reminder_message(
+        self, sub: dict, time_text: str, lang: str
+    ) -> None:
         price = self.config.subscription_price
+        caption, entities = build_caption(
+            "    ",
+            custom_emoji(ICON_BOW),
+            " ",
+            bold(t("reminder_title", lang)),
+            " ",
+            custom_emoji(ICON_BOW),
+            "\n\n",
+            t("sub_expires_in", lang),
+            bold(time_text),
+            " ",
+            custom_emoji(ICON_HOURGLASS),
+            "\n",
+            t("renew_to_keep", lang),
+            custom_emoji(ICON_VAMPIRE),
+        )
+
+        try:
+            msg = await self.bot.send_animation(
+                chat_id=sub["user_id"],
+                animation=await get_gif(),
+                caption=caption,
+                caption_entities=entities,
+                parse_mode=None,
+                reply_markup=get_renew_keyboard(price, lang=lang),
+            )
+            if msg.animation:
+                cache_gif_id(msg.animation.file_id)
+        except Exception as e:
+            logger.error("Failed to send reminder to %d: %s", sub["user_id"], e)
+            raise
+
+    async def _send_day_reminders(self) -> None:
+        from bot.database.models import get_expiring_subscriptions
+
         for days in self.config.reminder_days_before:
             subs = await get_expiring_subscriptions(days)
             for sub in subs:
-                reminder_col = f"reminder_{days}d"
-                if sub.get(reminder_col):
+                reminder_key = f"{days}d"
+                sent = await get_reminders_sent(sub["id"])
+                if reminder_key in sent:
                     continue
 
                 expires = datetime.fromisoformat(sub["expires_at"])
@@ -49,65 +115,58 @@ class SchedulerService:
                     expires = expires.replace(tzinfo=UTC)
                 days_left = (expires - datetime.now(UTC)).days
 
-                word = (
-                    "\u0434\u0435\u043d\u044c"
-                    if days_left == 1
-                    else "\u0434\u043d\u044f"
-                    if 2 <= days_left <= 4
-                    else "\u0434\u043d\u0435\u0439"
-                )
-
-                caption, entities = build_caption(
-                    "    ",
-                    custom_emoji(ICON_BOW),
-                    " ",
-                    bold(
-                        "\u041d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u0435"
-                    ),
-                    " ",
-                    custom_emoji(ICON_BOW),
-                    "\n\n"
-                    "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u0438\u0441\u0442\u0435\u043a\u0430\u0435\u0442 \u0447\u0435\u0440\u0435\u0437 ",
-                    bold(f"{days_left} {word}"),
-                    " ",
-                    custom_emoji(ICON_HOURGLASS),
-                    "\n\u041f\u0440\u043e\u0434\u043b\u0438\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0434\u043e\u0441\u0442\u0443\u043f. ",
-                    custom_emoji(ICON_VAMPIRE),
-                )
+                lang = await self._get_lang(sub["user_id"])
+                word = pluralize_days(days_left, lang)
+                time_text = f"{days_left} {word}"
 
                 try:
-                    msg = await self.bot.send_animation(
-                        chat_id=sub["user_id"],
-                        animation=await get_gif(),
-                        caption=caption,
-                        caption_entities=entities,
-                        parse_mode=None,
-                        reply_markup=get_renew_keyboard(price),
+                    await self._send_reminder_message(sub, time_text, lang)
+                    await mark_reminder_sent(sub["id"], reminder_key)
+                    logger.info(
+                        "Reminder (%s) sent to user %d", reminder_key, sub["user_id"]
                     )
-                    if msg.animation:
-                        cache_gif_id(msg.animation.file_id)
-                    await mark_reminder_sent(sub["id"], days)
-                    logger.info("Reminder (%dd) sent to user %d", days, sub["user_id"])
-                except Exception as e:
-                    logger.error("Failed to send reminder to %d: %s", sub["user_id"], e)
+                except Exception:
+                    pass
+
+    async def _send_hour_reminders(self) -> None:
+        for hours in self.config.reminder_hours_before:
+            subs = await _get_active_subs_expiring_within(hours)
+            for sub in subs:
+                reminder_key = f"{hours}h"
+                sent = await get_reminders_sent(sub["id"])
+                if reminder_key in sent:
+                    continue
+
+                lang = await self._get_lang(sub["user_id"])
+                time_text = t("hour_reminder_text", lang, hours=hours)
+
+                try:
+                    await self._send_reminder_message(sub, time_text, lang)
+                    await mark_reminder_sent(sub["id"], reminder_key)
+                    logger.info(
+                        "Reminder (%s) sent to user %d", reminder_key, sub["user_id"]
+                    )
+                except Exception:
+                    pass
 
     async def _kick_expired(self) -> None:
         price = self.config.subscription_price
         expired = await get_expired_subscriptions()
         for sub in expired:
+            lang = await self._get_lang(sub["user_id"])
+
             caption, entities = build_caption(
                 "  ",
                 custom_emoji(ICON_BOW),
                 " ",
-                bold(
-                    "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430 \u0438\u0441\u0442\u0435\u043a\u043b\u0430"
-                ),
+                bold(t("sub_expired_title", lang)),
                 " ",
                 custom_emoji(ICON_BOW),
-                "\n\n"
-                "\u0412\u044b \u0443\u0434\u0430\u043b\u0435\u043d\u044b \u0438\u0437 \u043a\u0430\u043d\u0430\u043b\u0430. ",
+                "\n\n",
+                t("kicked_from_channel", lang),
                 custom_emoji(ICON_EXPIRED),
-                "\n\u041e\u0444\u043e\u0440\u043c\u0438\u0442\u0435 \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443 \u0437\u0430\u043d\u043e\u0432\u043e \u0434\u043b\u044f \u0434\u043e\u0441\u0442\u0443\u043f\u0430. ",
+                "\n",
+                t("subscribe_again", lang),
                 custom_emoji(ICON_VAMPIRE),
             )
             try:
@@ -117,7 +176,7 @@ class SchedulerService:
                     caption=caption,
                     caption_entities=entities,
                     parse_mode=None,
-                    reply_markup=get_renew_keyboard(price),
+                    reply_markup=get_renew_keyboard(price, lang=lang),
                 )
                 if msg.animation:
                     cache_gif_id(msg.animation.file_id)

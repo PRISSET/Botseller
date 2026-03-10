@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bot.config import BotConfig, load_config
 from bot.database.db import close_db, init_db
 from bot.handlers import channel, payment, start
+from bot.i18n.middleware import LanguageMiddleware
 from bot.services.crypto_pay import CryptoPayService
 from bot.services.scheduler import SchedulerService
 from bot.services.subscription import SubscriptionService
@@ -42,7 +43,8 @@ async def main() -> None:
         bot=bot, config=config, subscription_service=subscription_service
     )
 
-    dp.update.middleware
+    dp.message.middleware(LanguageMiddleware())
+    dp.callback_query.middleware(LanguageMiddleware())
     dp["config"] = config
     dp["crypto_pay"] = crypto_pay
     dp["subscription_service"] = subscription_service

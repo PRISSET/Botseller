@@ -5,7 +5,8 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from bot.config import BotConfig
-from bot.database.models import get_active_subscription
+from bot.database.models import get_active_subscription, set_user_language
+from bot.i18n.texts import t
 from bot.keyboards.inline import (
     ICON_ACTIVE,
     ICON_BOW,
@@ -14,6 +15,7 @@ from bot.keyboards.inline import (
     ICON_HOURGLASS,
     ICON_STAR,
     ICON_VAMPIRE,
+    get_language_keyboard,
     get_main_keyboard,
 )
 from bot.services.subscription import SubscriptionService
@@ -33,13 +35,13 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, config: BotConfig) -> None:
+async def _send_main_menu(message: Message, config: BotConfig, lang: str) -> None:
     user_id = message.from_user.id
     price = config.subscription_price
 
     sub = await get_active_subscription(user_id)
     has_sub = False
+    expires = None
     if sub:
         expires = _parse_dt(sub["expires_at"])
         if expires > _now():
@@ -51,16 +53,15 @@ async def cmd_start(message: Message, config: BotConfig) -> None:
             "    ",
             custom_emoji(ICON_BOW),
             " ",
-            bold(
-                "\u0421 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u0438\u0435\u043c!"
-            ),
+            bold(t("welcome_back", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u041f\u043e\u0434\u043f\u0438\u0441\u043a\u0430: \u0430\u043a\u0442\u0438\u0432\u043d\u0430 ",
+            "\n\n",
+            t("sub_active", lang),
             custom_emoji(ICON_ACTIVE),
-            "\n\u041e\u0441\u0442\u0430\u043b\u043e\u0441\u044c: ",
-            bold(f"{days_left} \u0434\u043d. "),
+            "\n",
+            t("remaining", lang),
+            bold(t("days_left", lang, days=days_left)),
             custom_emoji(ICON_HOURGLASS),
         )
         msg = await message.answer_animation(
@@ -68,26 +69,26 @@ async def cmd_start(message: Message, config: BotConfig) -> None:
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=True),
+            reply_markup=get_main_keyboard(price, has_subscription=True, lang=lang),
         )
     else:
         caption, entities = build_caption(
             "     ",
             custom_emoji(ICON_BOW),
             " ",
-            bold(
-                "\u041f\u0440\u0438\u0432\u0430\u0442\u043d\u044b\u0439 \u043a\u0430\u043d\u0430\u043b"
-            ),
+            bold(t("private_channel", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n\u0426\u0435\u043d\u0430: ",
-            bold(f"{price:.0f} USDT / \u043c\u0435\u0441"),
+            "\n\n",
+            t("price_line", lang),
+            bold(t("price_value", lang, price=f"{price:.0f}")),
             " ",
             custom_emoji(ICON_COIN),
-            "\n\u041e\u0434\u043d\u043e\u0440\u0430\u0437\u043e\u0432\u0430\u044f \u0441\u0441\u044b\u043b\u043a\u0430-\u043f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435 ",
+            "\n",
+            t("one_time_link", lang),
             custom_emoji(ICON_STAR),
-            "\n\u041f\u0440\u043e\u0434\u043b\u0435\u043d\u0438\u0435 \u0432 \u043b\u044e\u0431\u043e\u0439 \u043c\u043e\u043c\u0435\u043d\u0442\n\n"
-            "\u041e\u0444\u043e\u0440\u043c\u0438\u0442\u0435 \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443 \u0434\u043b\u044f \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u043a\u0430\u043d\u0430\u043b\u0443. ",
+            "\n",
+            t("renew_anytime", lang),
             custom_emoji(ICON_VAMPIRE),
         )
         msg = await message.answer_animation(
@@ -95,15 +96,50 @@ async def cmd_start(message: Message, config: BotConfig) -> None:
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=False),
+            reply_markup=get_main_keyboard(price, has_subscription=False, lang=lang),
         )
 
     if msg.animation:
         cache_gif_id(msg.animation.file_id)
 
 
+@router.message(CommandStart())
+async def cmd_start(
+    message: Message, config: BotConfig, lang: str, has_language: bool
+) -> None:
+    if not has_language:
+        await message.answer(
+            t("choose_language", "ru"),
+            reply_markup=get_language_keyboard(),
+        )
+        return
+
+    await _send_main_menu(message, config, lang)
+
+
+@router.callback_query(F.data.startswith("set_lang:"))
+async def on_set_language(callback: CallbackQuery, config: BotConfig) -> None:
+    await callback.answer()
+    lang = callback.data.split(":")[1]
+    user_id = callback.from_user.id
+
+    await set_user_language(user_id, lang)
+
+    await callback.message.answer(t("language_set", lang))
+    await _send_main_menu(callback.message, config, lang)
+
+
+@router.callback_query(F.data == "change_language")
+async def on_change_language(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.answer(
+        t("choose_language", "ru"),
+        reply_markup=get_language_keyboard(),
+    )
+
+
 @router.callback_query(F.data == "profile")
-async def on_profile(callback: CallbackQuery, config: BotConfig) -> None:
+async def on_profile(callback: CallbackQuery, config: BotConfig, lang: str) -> None:
     await callback.answer()
     user_id = callback.from_user.id
     price = config.subscription_price
@@ -115,14 +151,14 @@ async def on_profile(callback: CallbackQuery, config: BotConfig) -> None:
             "          ",
             custom_emoji(ICON_BOW),
             " ",
-            bold("\u041f\u0440\u043e\u0444\u0438\u043b\u044c"),
+            bold(t("profile_title", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u0421\u0442\u0430\u0442\u0443\u0441: \u043d\u0435 \u0430\u043a\u0442\u0438\u0432\u043d\u0430 ",
+            "\n\n",
+            t("status_inactive", lang),
             custom_emoji(ICON_EXPIRED),
-            "\n\n"
-            "\u041e\u0444\u043e\u0440\u043c\u0438\u0442\u0435 \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443 \u0434\u043b\u044f \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u043a\u0430\u043d\u0430\u043b\u0443. ",
+            "\n\n",
+            t("subscribe_for_access", lang),
             custom_emoji(ICON_VAMPIRE),
         )
         msg = await callback.message.answer_animation(
@@ -130,7 +166,7 @@ async def on_profile(callback: CallbackQuery, config: BotConfig) -> None:
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=False),
+            reply_markup=get_main_keyboard(price, has_subscription=False, lang=lang),
         )
         if msg.animation:
             cache_gif_id(msg.animation.file_id)
@@ -148,34 +184,39 @@ async def on_profile(callback: CallbackQuery, config: BotConfig) -> None:
             "          ",
             custom_emoji(ICON_BOW),
             " ",
-            bold("\u041f\u0440\u043e\u0444\u0438\u043b\u044c"),
+            bold(t("profile_title", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u0421\u0442\u0430\u0442\u0443\u0441: \u0430\u043a\u0442\u0438\u0432\u043d\u0430 ",
+            "\n\n",
+            t("status_active", lang),
             custom_emoji(ICON_ACTIVE),
-            "\n\u0418\u0441\u0442\u0435\u043a\u0430\u0435\u0442: ",
+            "\n",
+            t("expires_label", lang),
             bold(expires.strftime("%d.%m.%Y %H:%M")),
-            "\n\u041e\u0441\u0442\u0430\u043b\u043e\u0441\u044c: ",
-            bold(f"{days_left} \u0434\u043d. {hours_left} \u0447. "),
+            "\n",
+            t("remaining", lang),
+            bold(t("remaining_detail", lang, days=days_left, hours=hours_left)),
             custom_emoji(ICON_HOURGLASS),
-            "\n\n\u041f\u0440\u043e\u0434\u043b\u0435\u043d\u0438\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0435\u0442 ",
-            bold("+30 \u0434\u043d\u0435\u0439"),
+            "\n\n",
+            t("renew_adds", lang),
+            bold(t("plus_30_days", lang)),
         )
     else:
         caption, entities = build_caption(
             "          ",
             custom_emoji(ICON_BOW),
             " ",
-            bold("\u041f\u0440\u043e\u0444\u0438\u043b\u044c"),
+            bold(t("profile_title", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u0421\u0442\u0430\u0442\u0443\u0441: \u043d\u0435 \u0430\u043a\u0442\u0438\u0432\u043d\u0430 ",
+            "\n\n",
+            t("status_expired_label", lang),
             custom_emoji(ICON_EXPIRED),
-            "\n\u0418\u0441\u0442\u0435\u043a\u043b\u0430: ",
+            "\n",
+            t("expired_at", lang),
             bold(expires.strftime("%d.%m.%Y %H:%M")),
-            "\n\n\u041e\u0444\u043e\u0440\u043c\u0438\u0442\u0435 \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0443 \u0434\u043b\u044f \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f \u0434\u043e\u0441\u0442\u0443\u043f\u0430. ",
+            "\n\n",
+            t("subscribe_to_restore", lang),
             custom_emoji(ICON_VAMPIRE),
         )
 
@@ -184,7 +225,7 @@ async def on_profile(callback: CallbackQuery, config: BotConfig) -> None:
         caption=caption,
         caption_entities=entities,
         parse_mode=None,
-        reply_markup=get_main_keyboard(price, has_subscription=active),
+        reply_markup=get_main_keyboard(price, has_subscription=active, lang=lang),
     )
     if msg.animation:
         cache_gif_id(msg.animation.file_id)
@@ -196,6 +237,7 @@ async def on_get_invite_link(
     bot: Bot,
     config: BotConfig,
     subscription_service: SubscriptionService,
+    lang: str,
 ) -> None:
     await callback.answer()
     user_id = callback.from_user.id
@@ -206,11 +248,11 @@ async def on_get_invite_link(
             "          ",
             custom_emoji(ICON_BOW),
             " ",
-            bold("\u041e\u0448\u0438\u0431\u043a\u0430"),
+            bold(t("error_title", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u043e\u0439 \u043f\u043e\u0434\u043f\u0438\u0441\u043a\u0438. ",
+            "\n\n",
+            t("no_active_sub", lang),
             custom_emoji(ICON_EXPIRED),
         )
         msg = await callback.message.answer_animation(
@@ -218,7 +260,7 @@ async def on_get_invite_link(
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=False),
+            reply_markup=get_main_keyboard(price, has_subscription=False, lang=lang),
         )
         if msg.animation:
             cache_gif_id(msg.animation.file_id)
@@ -229,13 +271,11 @@ async def on_get_invite_link(
             "   ",
             custom_emoji(ICON_BOW),
             " ",
-            bold(
-                "\u0412\u044b \u0443\u0436\u0435 \u0432 \u043a\u0430\u043d\u0430\u043b\u0435"
-            ),
+            bold(t("already_in_channel", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u041d\u043e\u0432\u0430\u044f \u0441\u0441\u044b\u043b\u043a\u0430 \u043d\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f. ",
+            "\n\n",
+            t("no_link_needed", lang),
             custom_emoji(ICON_ACTIVE),
         )
         msg = await callback.message.answer_animation(
@@ -243,7 +283,7 @@ async def on_get_invite_link(
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=True),
+            reply_markup=get_main_keyboard(price, has_subscription=True, lang=lang),
         )
         if msg.animation:
             cache_gif_id(msg.animation.file_id)
@@ -255,13 +295,11 @@ async def on_get_invite_link(
             " ",
             custom_emoji(ICON_BOW),
             " ",
-            bold(
-                "\u0421\u0441\u044b\u043b\u043a\u0430-\u043f\u0440\u0438\u0433\u043b\u0430\u0448\u0435\u043d\u0438\u0435"
-            ),
+            bold(t("invite_link_title", lang)),
             " ",
             custom_emoji(ICON_BOW),
-            "\n\n"
-            "\u0412\u0430\u0448\u0430 \u0441\u0441\u044b\u043b\u043a\u0430 (\u043e\u0434\u043d\u043e\u0440\u0430\u0437\u043e\u0432\u0430\u044f):\n"
+            "\n\n",
+            t("your_link", lang),
             f"{invite_link} ",
             custom_emoji(ICON_STAR),
         )
@@ -270,11 +308,11 @@ async def on_get_invite_link(
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=True),
+            reply_markup=get_main_keyboard(price, has_subscription=True, lang=lang),
         )
     else:
         caption, entities = build_caption(
-            "\u041e\u0448\u0438\u0431\u043a\u0430 \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438 \u0441\u0441\u044b\u043b\u043a\u0438. \u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u043e\u0437\u0436\u0435. ",
+            t("link_gen_error", lang),
             custom_emoji(ICON_EXPIRED),
         )
         msg = await callback.message.answer_animation(
@@ -282,7 +320,7 @@ async def on_get_invite_link(
             caption=caption,
             caption_entities=entities,
             parse_mode=None,
-            reply_markup=get_main_keyboard(price, has_subscription=True),
+            reply_markup=get_main_keyboard(price, has_subscription=True, lang=lang),
         )
     if msg.animation:
         cache_gif_id(msg.animation.file_id)

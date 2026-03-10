@@ -14,7 +14,8 @@ class BotConfig:
     crypto_pay_testnet: bool = True
     subscription_price: float = 7.0
     subscription_days: int = 30
-    reminder_days_before: tuple[int, ...] = (3, 2)
+    reminder_days_before: tuple[int, ...] = (15, 7, 3, 2, 1)
+    reminder_hours_before: tuple[int, ...] = (1,)
     scheduler_interval_minutes: int = 2
 
 
