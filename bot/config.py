@@ -12,7 +12,7 @@ class BotConfig:
     crypto_pay_token: str
     channel_id: int
     crypto_pay_testnet: bool = True
-    subscription_price: float = 7.0
+    subscription_price: float = 4.0
     subscription_days: int = 30
     reminder_days_before: tuple[int, ...] = (15, 7, 3, 2, 1)
     reminder_hours_before: tuple[int, ...] = (1,)
